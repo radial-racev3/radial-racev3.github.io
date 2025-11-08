@@ -134,7 +134,6 @@
     
     // Physics and Speed constants (ADJUSTED FOR FASTER FEEL AND MORE BUFFER)
     const BASE_MAX_PLAYER_SPEED = 25.0; 
-    // FIX: Changed BASE_IDLE_PLAYER_SPEED from 10.0 to 0.0 to enable full braking to a stop.
     const BASE_IDLE_PLAYER_SPEED = 0.0;  
     const BASE_TRAFFIC_SPEED = 6.0;    
     const BASE_ACCELERATION_RATE = 7.0; 
@@ -157,10 +156,24 @@
     // **ADJUSTED:** Minimum required Z-gap for the lateral buffer (1.2 car lengths)
     const MIN_LATERAL_GAP = CAR_SIZE.depth * 1.2; 
     
-    // >> START ADDITION: NPC Lane Change Constants
-    // Minimum Z gap for an NPC to change lanes (relative to other NPCs or player)
+    // NPC Lane Change Constants
     const NPC_MIN_Z_CHANGE_GAP = MIN_LONGITUDINAL_GAP * 1.2; 
+    
+    // >> START ADDITION: Upgrade Constants (The Point System Mechanics)
+    // Costs for L1, L2, L3 (Points)
+    const UPGRADE_COSTS = {
+        speed: [50, 150, 300], 
+        acceleration: [50, 150, 300],
+        handling: [40, 100, 200],
+    };
+    // Stat increase per level (Max Speed, Acceleration Rate, Handling Rate)
+    const UPGRADE_STATS = {
+        speed: [5.0, 10.0, 15.0], 
+        acceleration: [2.0, 4.0, 6.0], 
+        handling: [4.0, 8.0, 12.0], // Added to base playerCar.moveSpeed (12)
+    };
     // >> END ADDITION
+
 
     // --- ENVIRONMENT PRESETS ---
     const ENVIRONMENTS = [
@@ -184,6 +197,17 @@
         backgroundElements: [],
         weatherParticles: null,
         currentEnvironmentIndex: 0,
+        // >> START ADDITION for Points & Upgrades
+        totalPoints: 0, 
+        lastAwardedLevel: 1, // To track points awarded
+        levelUpPointReward: 10, // Starts at 10, increases by 5 every level up
+        playerUpgrades: {
+            speed: 0, // Level 0
+            acceleration: 0, // Level 0
+            handling: 0, // Level 0
+            look: 'Veyron' // Initial look
+        },
+        // >> END ADDITION
         keyBindings: {
             gas: 'ArrowUp',
             left: 'ArrowLeft',
@@ -236,9 +260,8 @@
     function createVeyronMesh(color) {
         const carGroup = new THREE.Group();
         const primaryColor = color;
-        const secondaryColor = 0xAAAAAA; // Silver/Gray contrast for the Veyron look
+        const secondaryColor = 0xAAAAAA; 
 
-        // --- Materials for Realism (High Metalness, Low Roughness for Glossy Finish) ---
         const primaryMaterial = new THREE.MeshStandardMaterial({ 
             color: primaryColor, 
             metalness: 0.9, 
@@ -254,16 +277,16 @@
         const headlightMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFF55 });
 
         const width = CAR_SIZE.width * 1.0;
-        const height = CAR_SIZE.height * 0.8; // Lower profile
-        const depth = CAR_SIZE.depth * 1.1; // Slightly longer
+        const height = CAR_SIZE.height * 0.8; 
+        const depth = CAR_SIZE.depth * 1.1; 
 
-        // 1. Main Body (Lower and Sleek)
+        // 1. Main Body
         const mainBodyGeometry = new THREE.BoxGeometry(width, height, depth);
         const mainBody = new THREE.Mesh(mainBodyGeometry, primaryMaterial);
         mainBody.position.y = height / 2;
         carGroup.add(mainBody);
 
-        // 2. Cabin/Roof (Secondary Color)
+        // 2. Cabin/Roof
         const cabinWidth = width * 0.7;
         const cabinHeight = height * 0.5;
         const cabinDepth = depth * 0.4;
@@ -273,14 +296,14 @@
         cabin.position.z = depth * 0.1;
         carGroup.add(cabin);
 
-        // 3. Windows (Black Box inside Cabin)
+        // 3. Windows
         const windowGeometry = new THREE.BoxGeometry(cabinWidth * 0.9, cabinHeight * 0.6, cabinDepth * 0.9);
         const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
         windowMesh.position.copy(cabin.position);
         windowMesh.position.y += cabinHeight * 0.05; 
         carGroup.add(windowMesh);
 
-        // 4. Front Grille (Horseshoe Approximation)
+        // 4. Front Grille
         const grilleWidth = width * 0.25;
         const grilleHeight = height * 0.5;
         const grilleDepth = 0.1;
@@ -290,16 +313,14 @@
         grille.position.z = depth / 2 + grilleDepth / 2;
         carGroup.add(grille);
 
-        // 5. Headlights (small yellow boxes on the front edges)
+        // 5. Headlights
         const headlightSize = 0.05;
         const headlightGeometry = new THREE.BoxGeometry(headlightSize, headlightSize, headlightSize);
         
-        // Left Headlight
         const headlightL = new THREE.Mesh(headlightGeometry, headlightMaterial);
         headlightL.position.set(width * 0.45, height * 0.7, depth / 2 + 0.01);
         carGroup.add(headlightL);
 
-        // Right Headlight
         const headlightR = new THREE.Mesh(headlightGeometry, headlightMaterial);
         headlightR.position.set(-width * 0.45, height * 0.7, depth / 2 + 0.01);
         carGroup.add(headlightR);
@@ -307,7 +328,6 @@
         // 6. Wheels 
         const wheelRadius = CAR_SIZE.width * 0.075; 
         const wheelDepth = 0.1;
-        // Use more segments for a slightly rounder wheel look
         const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelDepth, 12); 
         
         const wheelPositions = [
@@ -335,15 +355,87 @@
         return carGroup;
     }
 
+    // >> START ADDITION: Muscle Car Mesh (New Look)
+    /** Creates a Muscle Car-like car mesh. */
+    function createMuscleCarMesh(color) {
+        const carGroup = new THREE.Group();
+        const primaryColor = color;
+
+        // Materials
+        const primaryMaterial = new THREE.MeshStandardMaterial({ 
+            color: primaryColor, 
+            metalness: 0.7, 
+            roughness: 0.2 
+        });
+        const secondaryMaterial = new THREE.MeshPhongMaterial({ color: 0x111111 }); // Black for contrast
+        const windowMaterial = new THREE.MeshPhongMaterial({ color: 0x111111, transparent: true, opacity: 0.8 });
+        const wheelMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 }); 
+
+        const width = CAR_SIZE.width * 1.2; // Wider
+        const height = CAR_SIZE.height * 1.1; // Taller
+        const depth = CAR_SIZE.depth * 1.0; 
+
+        // 1. Main Body (Boxy and heavy)
+        const mainBodyGeometry = new THREE.BoxGeometry(width, height, depth);
+        const mainBody = new THREE.Mesh(mainBodyGeometry, primaryMaterial);
+        mainBody.position.y = height / 2;
+        carGroup.add(mainBody);
+
+        // 2. Cabin/Roof (Flat top, extends further back)
+        const cabinWidth = width * 0.9;
+        const cabinHeight = height * 0.4;
+        const cabinDepth = depth * 0.5;
+        const cabinGeometry = new THREE.BoxGeometry(cabinWidth, cabinHeight, cabinDepth);
+        const cabin = new THREE.Mesh(cabinGeometry, secondaryMaterial);
+        cabin.position.y = height + cabinHeight / 2;
+        cabin.position.z = -depth * 0.1; // Shift slightly back
+        carGroup.add(cabin);
+
+        // 3. Windows
+        const windowGeometry = new THREE.BoxGeometry(cabinWidth * 0.9, cabinHeight * 0.7, cabinDepth * 0.9);
+        const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+        windowMesh.position.copy(cabin.position);
+        carGroup.add(windowMesh);
+        
+        // 4. Wheels 
+        const wheelRadius = CAR_SIZE.width * 0.1; // Chunkier wheels
+        const wheelDepth = 0.1;
+        const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelDepth, 12); 
+        
+        const wheelPositions = [
+            { x: width * 0.45, z: depth * 0.35 },
+            { x: -width * 0.45, z: depth * 0.35 },
+            { x: width * 0.45, z: -depth * 0.4 },
+            { x: -width * 0.45, z: -depth * 0.4 },
+        ];
+
+        wheelPositions.forEach(pos => {
+            const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            wheel.rotation.z = Math.PI / 2;
+            wheel.position.set(pos.x, wheelRadius, pos.z);
+            carGroup.add(wheel);
+        });
+
+        carGroup.children.forEach(child => {
+            child.castShadow = true;
+            child.receiveShadow = true;
+        });
+        
+        carGroup.userData.isCar = true;
+        carGroup.userData.carType = 'muscle';
+        carGroup.userData.collisionDepth = depth; 
+        return carGroup;
+    }
+    // >> END ADDITION
+
 
     /** Creates a generic car mesh (used for player and standard traffic) with body, cabin, and wheels. */
     function createGenericCarMesh(color) {
         const carGroup = new THREE.Group();
-        // --- MODIFIED: Improved Standard Material for glossy traffic cars ---
         const material = new THREE.MeshStandardMaterial({ 
             color: color, 
             metalness: 0.6, 
-            roughness: 0.4 // Glossy paint
+            roughness: 0.4 
         });
         
         // Main Body
@@ -357,7 +449,6 @@
         const cabinHeight = CAR_SIZE.height * 0.6;
         const cabinDepth = CAR_SIZE.depth * 0.6;
         const cabinGeometry = new THREE.BoxGeometry(cabinWidth, cabinHeight, cabinDepth);
-        // Use Phong for a simple window/cabin look
         const cabinMaterial = new THREE.MeshPhongMaterial({ color: 0x222222, shininess: 50 }); 
         
         const cabin = new THREE.Mesh(cabinGeometry, cabinMaterial);
@@ -365,10 +456,9 @@
         cabin.position.z = -CAR_SIZE.depth * 0.1;
         carGroup.add(cabin);
 
-        // Wheels (Simple cylinders)
+        // Wheels
         const wheelRadius = CAR_SIZE.width * 0.075; 
         const wheelDepth = 0.1;
-        // Increased segments for rounder wheels
         const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelDepth, 12); 
         const wheelMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 }); 
         
@@ -399,11 +489,10 @@
     /** Creates a truck mesh. */
     function createTruckMesh(color) {
         const carGroup = new THREE.Group();
-        // --- MODIFIED: Improved Standard Material for traffic trucks ---
         const material = new THREE.MeshStandardMaterial({ 
             color: color, 
             metalness: 0.4, 
-            roughness: 0.7 // Less glossy, heavy-duty look
+            roughness: 0.7 
         });
 
         // Main Body (Box)
@@ -412,25 +501,24 @@
         mainBody.position.y = TRUCK_SIZE.height / 2;
         carGroup.add(mainBody);
 
-        // Cabin (Smaller box on the front)
+        // Cabin 
         const cabinWidth = TRUCK_SIZE.width * 0.8;
         const cabinHeight = TRUCK_SIZE.height * 0.6;
         const cabinDepth = TRUCK_SIZE.depth * 0.25;
         const cabinGeometry = new THREE.BoxGeometry(cabinWidth, cabinHeight, cabinDepth);
         const cabinMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0x444444, // Dark cabin
+            color: 0x444444, 
             shininess: 30 
         }); 
         
         const cabin = new THREE.Mesh(cabinGeometry, cabinMaterial);
         cabin.position.y = TRUCK_SIZE.height + cabinHeight / 2;
-        cabin.position.z = TRUCK_SIZE.depth * 0.3; // Position at the front
+        cabin.position.z = TRUCK_SIZE.depth * 0.3; 
         carGroup.add(cabin);
         
         // Wheels (Adjusted for truck size)
         const wheelRadius = CAR_SIZE.width * 0.1; 
         const wheelDepth = 0.15;
-        // Increased segments for rounder wheels
         const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelDepth, 12); 
         const wheelMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 }); 
         
@@ -454,26 +542,32 @@
         });
         carGroup.userData.isCar = true;
         carGroup.userData.carType = 'truck';
-        carGroup.userData.collisionDepth = TRUCK_SIZE.depth; // Set dynamic depth
+        carGroup.userData.collisionDepth = TRUCK_SIZE.depth; 
         return carGroup;
     }
 
-    /** Creates a car mesh (randomly selects between types for traffic, or always generic for player). */
+    /** Creates a car mesh (randomly selects between types for traffic, or specific type for player). */
     function createCarMesh(color, isPlayer = false) {
         if (isPlayer) {
-            // --- MODIFIED: Use the new Veyron mesh for the player ---
-            return createVeyronMesh(0x00008B); // Deep Blue
+            // Apply playerUpgrades.look
+            const lookType = gameState.playerUpgrades.look;
+            if (lookType === 'Veyron') {
+                return createVeyronMesh(0x00008B); // Deep Blue
+            } else if (lookType === 'Muscle') {
+                return createMuscleCarMesh(0x8B0000); // Deep Red
+            }
+            return createVeyronMesh(0x00008B); // Default fallback
         }
 
         // Randomly choose car type for traffic
         const carTypes = [createGenericCarMesh, createTruckMesh];
-        const weights = [80, 20]; // 80% generic car, 20% truck
+        const weights = [80, 20]; 
 
         let totalWeight = 0;
         for (const weight of weights) { totalWeight += weight; }
 
         let random = Math.random() * totalWeight;
-        let selectedType = createGenericCarMesh; // Default to generic
+        let selectedType = createGenericCarMesh; 
 
         for (let i = 0; i < carTypes.length; i++) {
             random -= weights[i];
@@ -495,7 +589,7 @@
         detailGroup.userData.isBackgroundElement = true;
         
         if (style === 'none') {
-            return detailGroup; // Return empty group for "night ascent"
+            return detailGroup; 
         }
 
         const trunkColor = 0x7c4912;
@@ -553,11 +647,8 @@
         const zWrap = ROAD_DEPTH * 0.8;
 
         for (let i = 0; i < particleCount; i++) {
-            // X: Wide range across the scene
             positions.push( (Math.random() - 0.5) * rainVolumeWidth ); 
-            // Y: High above the road
             positions.push( 15 + Math.random() * 10 ); 
-            // Z: Spread out along the road depth
             positions.push( FAR_Z_SPAWN + Math.random() * zWrap );
         }
 
@@ -606,28 +697,20 @@
         const initialEnv = ENVIRONMENTS[0];
         scene.fog = new THREE.Fog(initialEnv.skyColor, ROAD_DEPTH * initialEnv.fogNear, ROAD_DEPTH * initialEnv.fogFar);
         
-        // >> START MODIFICATION: Revert to Perspective Camera for Chase View
+        // Use PerspectiveCamera for Chase View
         const initialWidth = window.innerWidth;
         const initialHeight = window.innerHeight;
         const aspect = initialWidth / initialHeight;
         
-        // Use PerspectiveCamera again
         camera = new THREE.PerspectiveCamera(
-            75,         // fov (Field of View)
-            aspect,     // aspect ratio
-            0.1,        // near clipping plane
-            ROAD_DEPTH + 50 // far clipping plane
+            75,         
+            aspect,     
+            0.1,        
+            ROAD_DEPTH + 50 
         );
 
-        // Position it "barely over" and slightly behind the car
-        // Player is at PLAYER_Z (which is 10)
-        // So we set camera Y=4 (low), Z=15 (5 units behind the player)
         camera.position.set(0, 4, PLAYER_Z + 5); 
-        
-        // Look *forward* from the car's position, slightly down
-        // We look at Y=2, and 10 units *in front* of the player (Z=0)
         camera.lookAt(0, 2, PLAYER_Z - 10); 
-        // >> END MODIFICATION
 
         // Renderer setup
         renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -639,17 +722,14 @@
         window.addEventListener('resize', onWindowResize);
         clock = new THREE.Clock();
 
-        // Lighting - Enhanced for better contrast and shadows
-        // 1. Hemisphere Light (Soft ambient lighting)
+        // Lighting 
         const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.5);
         scene.add(hemisphereLight);
 
-        // 2. Directional Light (Sun/Headlight effect for shadows)
         const directionalLight = new THREE.DirectionalLight(0xffffff, 3);
         directionalLight.position.set(5, 10, 5);
         directionalLight.castShadow = true;
         
-        // >> START MODIFICATION: Improve shadow quality (Kept from previous version)
         directionalLight.shadow.mapSize.width = 2048; 
         directionalLight.shadow.mapSize.height = 2048;
         directionalLight.shadow.camera.left = -ROAD_WIDTH * 1.5; 
@@ -658,7 +738,6 @@
         directionalLight.shadow.camera.bottom = -20;
         directionalLight.shadow.camera.near = 1;
         directionalLight.shadow.camera.far = 40; 
-        // >> END MODIFICATION
         
         scene.add(directionalLight);
     }
@@ -669,17 +748,14 @@
         const newWidth = window.innerWidth;
         const newHeight = window.innerHeight;
 
-        // >> START MODIFICATION: Update Perspective Camera properties
         camera.aspect = newWidth / newHeight;
-        // >> END MODIFICATION
-
         camera.updateProjectionMatrix();
         renderer.setSize(newWidth, newHeight);
     }
     
     /** Creates the static road and the animated lane markings. */
     function createRoad() {
-        // 1. Road Surface (Fixed Classic Asphalt Color)
+        // 1. Road Surface 
         const roadGeometry = new THREE.PlaneGeometry(ROAD_WIDTH, ROAD_DEPTH, 1, 150); 
         const roadMaterial = new THREE.MeshLambertMaterial({ color: CLASSIC_ROAD_COLOR });
         const roadMesh = new THREE.Mesh(roadGeometry, roadMaterial);
@@ -695,7 +771,6 @@
         const lineDepth = 1.2; 
         const lineGap = 1.8; 
         const totalPattern = lineDepth + lineGap;
-        // Calculate needed number of lines based on depth
         const numLines = Math.ceil(ROAD_DEPTH / totalPattern) * 2; 
         
         for (let i = 1; i < LANE_COUNT; i++) {
@@ -709,7 +784,6 @@
                 const lineMesh = new THREE.Mesh(lineGeometry, lineMaterial);
                 
                 lineMesh.rotation.x = -Math.PI / 2;
-                // Offset the starting Z position to ensure wrapping works smoothly
                 lineMesh.position.set(xPos, 0.01, FAR_Z_SPAWN + j * totalPattern); 
                 lineGroup.add(lineMesh);
             }
@@ -745,13 +819,24 @@
         const speedFactor = Math.pow(LEVEL_MULTIPLIER, gameState.level - 1); 
 
         MAX_PLAYER_SPEED = BASE_MAX_PLAYER_SPEED * speedFactor;
-        IDLE_PLAYER_SPEED = BASE_IDLE_PLAYER_SPEED * speedFactor; // Now 0.0
+        IDLE_PLAYER_SPEED = BASE_IDLE_PLAYER_SPEED * speedFactor;
         TRAFFIC_SPEED = BASE_TRAFFIC_SPEED * speedFactor;
         ACCELERATION_RATE = BASE_ACCELERATION_RATE * speedFactor;
         DECELERATION_RATE = BASE_DECELERATION_RATE * speedFactor;
         
-        // This line now clamps minimum speed to 0.0, correctly implementing the full stop feature
         gameState.playerSpeedUnits = Math.max(gameState.playerSpeedUnits, IDLE_PLAYER_SPEED);
+
+        // >> START MODIFICATION: Apply Upgrades
+        const { speed, acceleration, handling } = gameState.playerUpgrades;
+        
+        // Reset moveSpeed to base value
+        gameState.playerCar.moveSpeed = 12; 
+        
+        // Add upgrade bonuses (level is 1-indexed for array, so use [level - 1])
+        if (speed > 0) MAX_PLAYER_SPEED += UPGRADE_STATS.speed[speed - 1];
+        if (acceleration > 0) ACCELERATION_RATE += UPGRADE_STATS.acceleration[acceleration - 1];
+        if (handling > 0) gameState.playerCar.moveSpeed += UPGRADE_STATS.handling[handling - 1];
+        // >> END MODIFICATION
     }
 
     /** Updates the scene's colors, fog, and light based on the current level/environment. */
@@ -830,10 +915,8 @@
         const trafficColors = [0xe74c3c, 0xf1c40f, 0x9b59b6, 0x1abc9c, 0xecf0f1, 0x34495e, 0x95a5a6]; 
         const carColor = trafficColors[Math.floor(Math.random() * trafficColors.length)];
 
-        // Pass false for isPlayer
         const carMesh = createCarMesh(carColor, false);
         
-        // Check which size we used to adjust the spawn position correctly
         const carDepth = carMesh.userData.collisionDepth;
         
         carMesh.position.set(
@@ -844,48 +927,35 @@
 
         carMesh.userData.lane = lane; 
         
-        // >> START ADDITION: Add state for lane changing AI (Kept from previous)
         carMesh.userData.isChangingLanes = false;
         carMesh.userData.targetX = carMesh.position.x;
-        // Time before next decision
         carMesh.userData.lastLaneChangeDecision = 0; 
-        // Decide to change lanes every 3-8 seconds
         carMesh.userData.timeToNextChange = 3 + Math.random() * 5; 
-        // Slower move speed than player
         carMesh.userData.moveSpeed = 4 + Math.random() * 4; 
-        // >> END ADDITION
         
         scene.add(carMesh);
         gameState.traffic.push(carMesh);
     }
     
-    /** * Checks if spawning a car in a given lane adheres to the minimum separation rules.
-     * Crucially checks for overlapping cars at the far spawn point.
-     * @param {number} laneToSpawn - The lane index we are considering placing a new car.
-     * @returns {boolean} True if it is safe to spawn, false otherwise.
-     */
+    /** Checks if spawning a car in a given lane adheres to the minimum separation rules. */
     function isSpawnSafe(laneToSpawn) {
         const currentLane = laneToSpawn;
         const spawnZ = FAR_Z_SPAWN; 
         
-        // Find existing traffic that is close to the spawn point
         const relevantTraffic = gameState.traffic.filter(car => 
-            car.position.z < PLAYER_Z + 10 // Only consider cars that haven't passed the player yet
+            car.position.z < PLAYER_Z + 10 
         );
         
         for (const car of relevantTraffic) {
             const carZ = car.position.z;
-            // Get the car's collision depth dynamically
             const carDepth = car.userData.collisionDepth || CAR_SIZE.depth;
             
             // 1. Same-Lane Check (Longitudinal Separation)
             if (car.userData.lane === currentLane) {
-                // Check for immediate overlap (car spawning *inside* existing car)
                 if (Math.abs(carZ - spawnZ) < carDepth * 0.5) {
                     return false; 
                 }
                 
-                // Check if the car is too close to the front of the spawn point
                 if (carZ - spawnZ < MIN_LONGITUDINAL_GAP && carZ - spawnZ > 0) {
                     return false; 
                 }
@@ -895,24 +965,21 @@
             const isAdjacent = Math.abs(car.userData.lane - currentLane) === 1;
 
             if (isAdjacent) {
-                // Check if the adjacent car is too close longitudinally
                 if (Math.abs(carZ - spawnZ) < MIN_LATERAL_GAP) {
                     return false;
                 }
             }
         }
         
-        // 3. Playability Check: Ensure a path remains (Don't spawn if all other lanes are blocked near Z=FAR_Z_SPAWN)
+        // 3. Playability Check: Ensure a path remains 
         const blockedLanes = new Set(); 
         
         for (const car of relevantTraffic) {
-            // A lane is blocked if a car is within the generous longitudinal gap distance
             if (Math.abs(car.position.z - spawnZ) < MIN_LONGITUDINAL_GAP * 0.75) { 
                 blockedLanes.add(car.userData.lane);
             }
         }
         
-        // If all lanes are blocked, it's impossible to pass through the spawn zone.
         if (blockedLanes.size === LANE_COUNT) {
             return false;
         }
@@ -920,24 +987,16 @@
         return true; 
     }
     
-    // >> START ADDITION: NPC Lane Change Safety Check (Kept from previous)
-    /**
-     * Checks if it's safe for an NPC car to move into a target lane.
-     * @param {THREE.Mesh} car - The NPC car that wants to change lanes.
-     * @param {number} targetLane - The lane index the car wants to move to.
-     * @returns {boolean} True if the lane change is safe, false otherwise.
-     */
+    /** Checks if it's safe for an NPC car to move into a target lane. */
     function isNPCSafeToChange(car, targetLane) {
         const carZ = car.position.z;
         
         // 1. Check against other traffic
         for (const otherCar of gameState.traffic) {
-            if (otherCar === car) continue; // Don't check against self
+            if (otherCar === car) continue; 
 
-            // Check cars in the target lane
             if (otherCar.userData.lane === targetLane) {
                 const zDiff = Math.abs(otherCar.position.z - carZ);
-                // If longitudinally too close, it's not safe
                 if (zDiff < NPC_MIN_Z_CHANGE_GAP) {
                     return false;
                 }
@@ -947,15 +1006,13 @@
         // 2. Check against the player
         if (targetLane === gameState.playerCar.lane) {
             const zDiff = Math.abs(PLAYER_Z - carZ);
-            // If longitudinally too close to the player, it's not safe
             if (zDiff < NPC_MIN_Z_CHANGE_GAP) {
                 return false;
             }
         }
         
-        return true; // No conflicts found
+        return true; 
     }
-    // >> END ADDITION
 
 
     /** Moves and wraps all dynamic elements to create the infinite road effect. */
@@ -970,7 +1027,6 @@
             brakePedalEl.classList.remove('active', 'bg-red-500');
             
         } else {
-            // Because IDLE_PLAYER_SPEED is now 0.0, this brakes the car to a full stop.
             if (playerSpeedUnits > IDLE_PLAYER_SPEED) {
                 gameState.playerSpeedUnits = Math.max(IDLE_PLAYER_SPEED, playerSpeedUnits - DECELERATION_RATE * deltaTime);
             }
@@ -982,20 +1038,15 @@
         playerCar.currentX += (playerCar.targetX - playerCar.currentX) * playerCar.moveSpeed * deltaTime;
         playerCar.mesh.position.x = playerCar.currentX;
 
-        // >> START MODIFICATION: Camera Follow Logic (Chase Cam)
-        // Camera X position matches player's smoothed X position
+        // Camera Follow Logic
         camera.position.x = playerCar.currentX;
         
-        // The camera needs to look *at* a point in front of the car,
-        // while also matching the car's X position.
-        // We create a "lookAt" target vector.
         const lookAtTarget = new THREE.Vector3(
-            playerCar.currentX, // Match car's X
-            2,                  // Look slightly down (Y=2)
-            PLAYER_Z - 10       // Look 10 units in front of the player
+            playerCar.currentX, 
+            2,                  
+            PLAYER_Z - 10       
         );
         camera.lookAt(lookAtTarget);
-        // >> END MODIFICATION
 
         // 3. Motion Calculations
         const trafficRelativeMoveDistance = (playerSpeedUnits - TRAFFIC_SPEED) * deltaTime;
@@ -1008,26 +1059,22 @@
             // Z-axis movement
             carMesh.position.z += trafficRelativeMoveDistance; 
             
-            // >> START ADDITION: NPC Lane Change AI (Kept from previous)
+            // NPC Lane Change AI
             carMesh.userData.lastLaneChangeDecision += deltaTime;
             
-            // A. Check if it's time to make a decision
             if (carMesh.userData.lastLaneChangeDecision > carMesh.userData.timeToNextChange && !carMesh.userData.isChangingLanes) {
                 carMesh.userData.lastLaneChangeDecision = 0;
-                carMesh.userData.timeToNextChange = 3 + Math.random() * 5; // Reset timer
+                carMesh.userData.timeToNextChange = 3 + Math.random() * 5; 
 
                 const currentLane = carMesh.userData.lane;
                 const direction = Math.random() > 0.5 ? 1 : -1;
                 let targetLane = currentLane + direction;
 
-                // If at edge, try the other direction
                 if (targetLane < 0 || targetLane >= LANE_COUNT) {
                     targetLane = currentLane - direction;
                 }
 
-                // If still out of bounds (e.g., single lane road, though not in this game), do nothing
                 if (targetLane >= 0 && targetLane < LANE_COUNT && targetLane !== currentLane) {
-                    // C. Check if the target lane is safe
                     if (isNPCSafeToChange(carMesh, targetLane)) {
                         carMesh.userData.isChangingLanes = true;
                         carMesh.userData.lane = targetLane;
@@ -1036,20 +1083,17 @@
                 }
             }
 
-            // C. Move the car if it's changing lanes
             if (carMesh.userData.isChangingLanes) {
                 const moveSpeed = carMesh.userData.moveSpeed;
                 carMesh.position.x += (carMesh.userData.targetX - carMesh.position.x) * moveSpeed * deltaTime;
 
-                // Check if it has arrived
                 if (Math.abs(carMesh.userData.targetX - carMesh.position.x) < 0.05) {
                     carMesh.position.x = carMesh.userData.targetX;
                     carMesh.userData.isChangingLanes = false;
                 }
             }
-            // >> END ADDITION
             
-            // Collision Check (now checks against moving player AND moving NPCs)
+            // Collision Check
             if (checkCollision(playerCar.mesh, carMesh)) {
                 gameState.isGameOver = true;
                 showGameOverScreen();
@@ -1072,13 +1116,11 @@
             let attempts = 0;
             const maxAttempts = LANE_COUNT * 2; 
 
-            // Loop to find a safe lane to spawn in
             while (!isSpawnSafe(newLane) && attempts < maxAttempts) {
-                newLane = (newLane + 1) % LANE_COUNT; // Cycle to the next lane
+                newLane = (newLane + 1) % LANE_COUNT; 
                 attempts++;
             }
 
-            // Only spawn if a safe lane was found within attempts
             if (isSpawnSafe(newLane)) {
                 createTrafficCar(newLane);
             }
@@ -1086,7 +1128,7 @@
             gameState.lastTrafficSpawn = 0; 
         }
 
-        // 6. Move Lane Lines and Background Elements (Infinite Road Effect)
+        // 6. Move Lane Lines and Background Elements 
         scene.children.forEach(child => {
             if (child.userData.isLaneLine) {
                 const totalZExtent = child.userData.totalZExtent;
@@ -1099,7 +1141,7 @@
             } else if (child.userData.isBackgroundElement && child !== grassMesh) {
                 child.position.z += roadMoveDistance; 
                 if (child.position.z > DESPAWN_Z) {
-                    child.position.z -= ROAD_DEPTH + 30; // Wrap back to the far end
+                    child.position.z -= ROAD_DEPTH + 30; 
                 }
             }
         });
@@ -1132,16 +1174,13 @@
             positions[i + 2] += particleSpeed;
             positions[i + 1] += yOffset; 
             
-            // Add slight horizontal drift for effect
             positions[i] += Math.sin(positions[i + 2] * 0.1 + clock.getElapsedTime() * 0.5) * 0.05 * deltaTime * 60;
 
-            // Wrap Z position
             if (positions[i + 2] > PLAYER_Z + 5) {
                 positions[i + 2] -= zWrap;
                 positions[i + 1] = 15 + Math.random() * 10;
             }
             
-            // Wrap Y position
             if (positions[i + 1] < 0) {
                 positions[i + 1] = 15 + Math.random() * 10;
             }
@@ -1157,17 +1196,14 @@
         const halfWidth = CAR_SIZE.width / 2;
         const halfDepth = CAR_SIZE.depth / 2;
         
-        // Use the car's dynamic collision depth (set in createCarMesh/createTruckMesh)
         const trafficCollisionDepth = trafficMesh.userData.collisionDepth || CAR_SIZE.depth; 
         const trafficHalfDepth = trafficCollisionDepth / 2; 
 
         // 1. X-axis overlap check
-        // >> START MODIFICATION: Use the traffic's current X position for collision (Kept)
         const playerMinX = player.position.x - halfWidth * 0.9; 
         const playerMaxX = player.position.x + halfWidth * 0.9;
-        const trafficMinX = trafficMesh.position.x - halfWidth * 0.9; // Use position.x, not lane
-        const trafficMaxX = trafficMesh.position.x + halfWidth * 0.9; // Use position.x, not lane
-        // >> END MODIFICATION
+        const trafficMinX = trafficMesh.position.x - halfWidth * 0.9; 
+        const trafficMaxX = trafficMesh.position.x + halfWidth * 0.9; 
 
         const xOverlap = Math.max(0, Math.min(playerMaxX, trafficMaxX) - Math.max(playerMinX, trafficMinX));
 
@@ -1176,11 +1212,9 @@
             const playerFrontZ = playerZ + halfDepth;
             const playerBackZ = playerZ - halfDepth;
             
-            // Use trafficHalfDepth for traffic car
             const trafficFrontZ = trafficZ + trafficHalfDepth;
             const trafficBackZ = trafficZ - trafficHalfDepth;
 
-            // Use a slight tolerance to ensure the collision is forgiving but solid
             if (playerFrontZ > trafficBackZ + 0.1 && playerBackZ < trafficFrontZ - 0.1) {
                 return true;
             }
@@ -1191,10 +1225,9 @@
 
     /** Updates UI elements and checks for level progression. */
     function updateUI(deltaTime) {
-        const { score, level, playerSpeedUnits } = gameState;
+        const { score, level, playerSpeedUnits, lastAwardedLevel } = gameState;
         
         // Score update
-        // Only increase score if moving (playerSpeedUnits > 0)
         gameState.score += playerSpeedUnits * deltaTime * 10; 
         scoreEl.textContent = Math.floor(gameState.score);
         
@@ -1202,10 +1235,23 @@
         speedValueEl.textContent = Math.floor(playerSpeedUnits * SPEED_UNIT_TO_MPH);
 
         // Level check
-        const newLevel = Math.floor(score / 3500) + 1; // Slightly increased score needed for next level
+        const newLevel = Math.floor(score / 3500) + 1;
         if (newLevel > level) {
             gameState.level = newLevel;
             levelEl.textContent = gameState.level;
+            
+            // >> START POINT LOGIC: Award points and increase reward
+            if (newLevel > lastAwardedLevel) {
+                // Award points based on the current reward amount
+                gameState.totalPoints += gameState.levelUpPointReward;
+                
+                // Increase the reward amount for the *next* level-up by 5
+                gameState.levelUpPointReward += 5;
+                
+                gameState.lastAwardedLevel = newLevel;
+            }
+            // >> END POINT LOGIC
+
             scaleGameSpeed(); 
             updateEnvironment(gameState.level); 
         }
@@ -1223,11 +1269,10 @@
         const handler = (e) => {
             const newKey = e.key;
             
-            // Check for duplicate keys (prevent same key for different actions)
             for (const key in gameState.keyBindings) {
                 if (key !== action && gameState.keyBindings[key] === newKey) {
                     alert(`Key '${newKey}' is already used for ${key.toUpperCase()}.`);
-                    button.textContent = originalText; // Revert to current key
+                    button.textContent = originalText; 
                     document.removeEventListener('keydown', handler);
                     return;
                 }
@@ -1236,16 +1281,13 @@
             gameState.keyBindings[action] = newKey;
             button.textContent = newKey;
 
-            // Update controls info immediately if visible
             updateControlsInfo(); 
             
             document.removeEventListener('keydown', handler);
         };
 
-        // Temporarily remove focus from the button to ensure keydown is captured on the document
         button.blur(); 
         
-        // Remove old listener if any and add new one
         document.removeEventListener('keydown', handler);
         document.addEventListener('keydown', handler, { once: true });
     };
@@ -1271,7 +1313,7 @@
         controlsInfoEl.classList.add('hidden');
         pedalsContainerEl.classList.add('hidden');
         
-        // Clear old scene items (if any are left from a crash/restart)
+        // Clean up 3D scene elements 
         for (let i = scene.children.length - 1; i >= 0; i--) {
             const child = scene.children[i];
             if (child.userData.isCar || child.userData.isLaneLine || child.userData.isRoad || child.userData.isBackgroundElement || child.userData.isWeather || child.userData.isRoadDetail) {
@@ -1291,13 +1333,16 @@
                         <button onclick="startGame()" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-4 rounded-lg shadow-lg transition duration-200 text-xl tracking-wider">
                             START RACE
                         </button>
+                        <button onclick="showShopMenu()" class="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-3 rounded-lg shadow-md transition duration-200">
+                            SHOP (Upgrades)
+                        </button>
                         <button onclick="showHowToPlay()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-md transition duration-200">
                             HOW TO PLAY
                         </button>
                         <button onclick="showSettingsMenu()" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 rounded-lg shadow-md transition duration-200">
                             SETTINGS (Keybinds)
                         </button>
-                        </div>
+                    </div>
                 </div>
             </div>
         `;
@@ -1340,6 +1385,16 @@
                 <div class="menu-card rounded-2xl p-8 md:p-12 text-white w-11/12 md:w-1/3">
                     <h2 class="text-4xl font-extrabold mb-6 text-purple-400 text-center">GAME SETTINGS</h2>
                     
+                    <h3 class="text-2xl font-bold mb-4 text-gray-200">Car Look</h3>
+                    <div class="flex justify-between items-center p-3 bg-gray-700 rounded-lg mb-6">
+                        <button onclick="changeCarLook('Veyron')" class="w-1/2 bg-${gameState.playerUpgrades.look === 'Veyron' ? 'green-600' : 'gray-900'} hover:bg-green-700 text-white font-bold py-3 px-2 rounded-l-lg transition duration-200">
+                            Veyron (Sleek) ${gameState.playerUpgrades.look === 'Veyron' ? '✅' : ''}
+                        </button>
+                        <button onclick="changeCarLook('Muscle')" class="w-1/2 bg-${gameState.playerUpgrades.look === 'Muscle' ? 'green-600' : 'gray-900'} hover:bg-green-700 text-white font-bold py-3 px-2 rounded-r-lg transition duration-200">
+                            Muscle (Classic) ${gameState.playerUpgrades.look === 'Muscle' ? '✅' : ''}
+                        </button>
+                    </div>
+
                     <h3 class="text-2xl font-bold mb-4 text-gray-200">Key Bindings</h3>
 
                     <div class="space-y-4">
@@ -1371,6 +1426,164 @@
         `;
     }
 
+    // >> START MODIFICATION: Shop Functions
+
+    /** Converts upgrade level to a string for display. */
+    function getUpgradeLevelDisplay(upgradeType) {
+        const level = gameState.playerUpgrades[upgradeType];
+        if (level === 0) return 'Lv. 0 (Base)';
+        if (level < UPGRADE_COSTS[upgradeType].length) return `Lv. ${level}`;
+        return `Lv. ${level} (MAX!)`;
+    }
+
+    /** Generates the HTML for an upgrade button. */
+    function getUpgradeButtonHTML(type) {
+        const currentLevel = gameState.playerUpgrades[type];
+        const maxLevel = UPGRADE_COSTS[type].length;
+        
+        if (currentLevel >= maxLevel) {
+            return `
+                <button class="w-24 bg-gray-500 text-white font-bold py-2 rounded-lg cursor-not-allowed" disabled>
+                    MAX
+                </button>
+            `;
+        }
+
+        const cost = UPGRADE_COSTS[type][currentLevel];
+        const disabled = gameState.totalPoints < cost ? 'disabled' : '';
+        const bgColor = gameState.totalPoints < cost ? 'bg-red-800' : 'bg-green-600 hover:bg-green-700';
+        
+        let statText = '';
+        if (type === 'speed') statText = `(+${UPGRADE_STATS[type][currentLevel]} Speed)`;
+        if (type === 'acceleration') statText = `(+${UPGRADE_STATS[type][currentLevel]} Accel.)`;
+        if (type === 'handling') statText = `(+${UPGRADE_STATS[type][currentLevel]} Hand.)`;
+
+
+        return `
+            <div class="flex flex-col items-end">
+                <span class="text-xs text-gray-400 mb-1">${statText}</span>
+                <button onclick="applyUpgrade('${type}', ${cost})" class="w-24 ${bgColor} text-white font-bold py-2 rounded-lg transition duration-200" ${disabled}>
+                    ${cost} Pts
+                </button>
+            </div>
+        `;
+    }
+
+    /** Upgrades a car stat and updates the player's car model. */
+    window.applyUpgrade = function(type, cost) {
+        if (gameState.totalPoints < cost) {
+            alert("Not enough points!");
+            return;
+        }
+        
+        gameState.totalPoints -= cost;
+        gameState.playerUpgrades[type]++;
+        
+        // Re-apply speed scaling/upgrades
+        scaleGameSpeed(); 
+        
+        // Update the menu
+        showShopMenu(); 
+    }
+
+    /** Changes the player's car visual and updates the car model. */
+    window.changeCarLook = function(lookName) {
+        gameState.playerUpgrades.look = lookName;
+        
+        // --- FIX: Prevents the "position of null" error if called before game start ---
+        if (gameState.playerCar.mesh) {
+            // Re-create the player mesh with the new look
+            const oldMesh = gameState.playerCar.mesh;
+            const newMesh = createCarMesh(0x00008B, true); // Recalculates based on look in gameState
+            
+            newMesh.position.copy(oldMesh.position);
+            newMesh.rotation.copy(oldMesh.rotation);
+            
+            scene.remove(oldMesh);
+            oldMesh.geometry?.dispose();
+            scene.add(newMesh);
+            
+            gameState.playerCar.mesh = newMesh;
+        }
+        // --- END FIX ---
+        
+        // Update the menu (shop or settings)
+        if (modalContainerEl.querySelector('.shop-menu')) {
+             showShopMenu();
+        } else if (modalContainerEl.querySelector('.menu-card h2')?.textContent.includes('SETTINGS')) {
+            showSettingsMenu(); 
+        }
+    }
+
+
+    /** Shows the shop menu modal. */
+    window.showShopMenu = function() {
+        infoPanelEl.classList.add('hidden');
+
+        const { playerUpgrades, totalPoints } = gameState;
+        
+        // Helper to generate look button HTML
+        const getLookButtonHTML = (lookName, displayName) => {
+            const isActive = playerUpgrades.look === lookName;
+            const bgColor = isActive ? 'bg-indigo-700' : 'bg-gray-600 hover:bg-gray-500';
+            const buttonText = isActive ? 'EQUIPPED' : 'EQUIP';
+            const action = isActive ? '' : `onclick="changeCarLook('${lookName}')"`;
+            
+            return `
+                <div class="flex flex-col items-center bg-gray-800 p-4 rounded-lg shadow-lg">
+                    <span class="text-xl font-bold mb-2 text-blue-200">${displayName}</span>
+                    <button ${action} class="w-full ${bgColor} text-white font-bold py-2 rounded-lg transition duration-200">
+                        ${buttonText}
+                    </button>
+                </div>
+            `;
+        }
+
+        modalContainerEl.innerHTML = `
+            <div class="modal-overlay">
+                <div class="menu-card shop-menu rounded-2xl p-8 md:p-12 text-white w-11/12 md:w-3/5 lg:w-1/2">
+                    <h2 class="text-4xl font-extrabold mb-4 text-yellow-400 text-center">RACE SHOP</h2>
+                    
+                    <div class="mb-6 p-4 bg-gray-800 rounded-lg shadow-inner flex justify-center">
+                        <span class="text-2xl font-extrabold">Your Points: <span class="text-green-400">${totalPoints} Pts</span></span>
+                    </div>
+
+                    <h3 class="text-2xl font-bold mb-4 text-red-300 border-b border-red-900 pb-2">Performance Upgrades</h3>
+                    <div class="space-y-3">
+                        
+                        <div class="flex justify-between items-center p-3 bg-gray-700 rounded-lg">
+                            <span class="font-bold text-lg">Max Speed:</span>
+                            <span>${getUpgradeLevelDisplay('speed')}</span>
+                            ${getUpgradeButtonHTML('speed')}
+                        </div>
+                        
+                        <div class="flex justify-between items-center p-3 bg-gray-700 rounded-lg">
+                            <span class="font-bold text-lg">Acceleration:</span>
+                            <span>${getUpgradeLevelDisplay('acceleration')}</span>
+                            ${getUpgradeButtonHTML('acceleration')}
+                        </div>
+                        
+                        <div class="flex justify-between items-center p-3 bg-gray-700 rounded-lg">
+                            <span class="font-bold text-lg">Handling (Steering):</span>
+                            <span>${getUpgradeLevelDisplay('handling')}</span>
+                            ${getUpgradeButtonHTML('handling')}
+                        </div>
+
+                    </div>
+
+                    <h3 class="text-2xl font-bold mt-8 mb-4 text-blue-300 border-b border-blue-900 pb-2">Car Look (Free to Equip)</h3>
+                    <div class="grid grid-cols-2 gap-4">
+                        ${getLookButtonHTML('Veyron', 'Veyron Look')}
+                        ${getLookButtonHTML('Muscle', 'Muscle Look')}
+                    </div>
+
+                    <button onclick="showMainMenu()" class="mt-8 w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg transition duration-200">BACK TO MENU</button>
+                </div>
+            </div>
+        `;
+    }
+
+    // >> END MODIFICATION: Shop Functions
 
     /** Toggles the game's paused state and shows the modal. */
     window.togglePause = function() {
@@ -1410,7 +1623,6 @@
         `;
         pauseButtonEl.textContent = 'CRASHED';
         cancelAnimationFrame(animationFrameId);
-        // Hide game UI when game is over
         infoPanelEl.classList.add('hidden');
         controlsInfoEl.classList.add('hidden');
         pedalsContainerEl.classList.add('hidden');
@@ -1436,40 +1648,37 @@
         gameState.traffic = [];
         gameState.backgroundElements = [];
         gameState.lastTrafficSpawn = 0;
+        // Keep points and upgrades, only reset level-based reward tracking
+        gameState.lastAwardedLevel = 1;
+        gameState.levelUpPointReward = 10;
         cleanupWeather(); 
 
         scaleGameSpeed(); 
-        // Initial speed is IDLE_PLAYER_SPEED, which is now 0.0 (stopped)
         gameState.playerSpeedUnits = IDLE_PLAYER_SPEED; 
         
-        // Setup lanes if first run
         if (gameState.playerCar.lanePositions.length === 0) {
             calculateLanePositions();
         }
 
-        // Create player car (Veyron) - Use the isPlayer flag to ensure it's the custom mesh
+        // Create player car based on the look equipped in the shop
         gameState.playerCar.mesh = createCarMesh(0x00008B, true); 
-        // Set player to start in the new middle lane
         gameState.playerCar.lane = Math.floor(LANE_COUNT / 2); 
         gameState.playerCar.mesh.position.set(gameState.playerCar.lanePositions[gameState.playerCar.lane], 0, PLAYER_Z);
         gameState.playerCar.targetX = gameState.playerCar.lanePositions[gameState.playerCar.lane];
         gameState.playerCar.currentX = gameState.playerCar.lanePositions[gameState.playerCar.lane];
         scene.add(gameState.playerCar.mesh);
         
-        // >> START MODIFICATION: Reset camera position to player start
+        // Reset camera position to player start
         camera.position.x = gameState.playerCar.currentX;
-        // We also need to reset the Y and Z positions to the default chase cam angle
         camera.position.y = 4;
         camera.position.z = PLAYER_Z + 5;
         
-        // And reset the lookAt target
         const lookAtTarget = new THREE.Vector3(
             gameState.playerCar.currentX,
             2,
             PLAYER_Z - 10
         );
         camera.lookAt(lookAtTarget);
-        // >> END MODIFICATION
 
         // Rebuild static scene elements
         createRoad();
@@ -1477,7 +1686,6 @@
         
         // Update UI visibility
         infoPanelEl.classList.remove('hidden');
-        // controlsInfoEl.classList.remove('hidden'); // This line was removed in the previous step
         pedalsContainerEl.classList.remove('hidden');
         scoreEl.textContent = 0;
         levelEl.textContent = 1;
@@ -1505,14 +1713,9 @@
         
         const deltaTime = clock.getDelta(); 
         
-        // 1. Update all game physics and movement
-        // (This now includes camera movement and NPC AI)
         updateMotion(deltaTime);
-        
-        // 2. Update all UI displays and check for progression
         updateUI(deltaTime);
 
-        // 3. Render the 3D scene
         renderer.render(scene, camera);
 
         animationFrameId = requestAnimationFrame(gameLoop);
